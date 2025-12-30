@@ -116,10 +116,7 @@ struct Serve: AsyncParsableCommand {
         let database = databases.database(.psql, logger: logger, on: eventLoopGroup.next())!
         
         // Create Lightning backend
-        let lightningBackend = try await LightningBackendFactory.create(
-            type: config.lightningBackend,
-            config: config
-        )
+        let lightningBackend = try LightningBackendFactory.create(from: config)
         
         logger.info("Lightning backend initialized: \(config.lightningBackend.rawValue)")
         
@@ -158,8 +155,13 @@ struct Serve: AsyncParsableCommand {
         
         try await app.run()
         
-        // Cleanup
-        try await databases.shutdown()
+        // Cleanup - shutdown must be done synchronously on the event loop
+        let promise = eventLoopGroup.next().makePromise(of: Void.self)
+        eventLoopGroup.next().execute {
+            databases.shutdown()
+            promise.succeed(())
+        }
+        try await promise.futureResult.get()
         try await threadPool.shutdownGracefully()
     }
 }
@@ -236,7 +238,13 @@ struct Migrate: AsyncParsableCommand {
         
         logger.info("Migrations complete")
         
-        try await databases.shutdown()
+        // Cleanup - shutdown must be done synchronously on the event loop
+        let promise = eventLoopGroup.next().makePromise(of: Void.self)
+        eventLoopGroup.next().execute {
+            databases.shutdown()
+            promise.succeed(())
+        }
+        try await promise.futureResult.get()
         try await threadPool.shutdownGracefully()
     }
 }
