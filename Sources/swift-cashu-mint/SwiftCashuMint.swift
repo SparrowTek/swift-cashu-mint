@@ -67,7 +67,7 @@ struct Serve: AsyncParsableCommand {
         // Setup event loop and thread pool
         let eventLoopGroup = MultiThreadedEventLoopGroup.singleton
         let threadPool = NIOThreadPool(numberOfThreads: 4)
-        try await threadPool.start()
+        threadPool.start()
         
         // Setup database
         let databases = Databases(threadPool: threadPool, on: eventLoopGroup)
@@ -108,8 +108,8 @@ struct Serve: AsyncParsableCommand {
             logger: logger,
             on: eventLoopGroup.next()
         )
-        try await migrator.setupIfNeeded()
-        try await migrator.prepareBatch()
+        _ = migrator.setupIfNeeded()
+        _ = migrator.prepareBatch()
         logger.info("Database migrations complete")
         
         // Get the database connection
@@ -187,7 +187,7 @@ struct Migrate: AsyncParsableCommand {
         // Setup event loop and thread pool
         let eventLoopGroup = MultiThreadedEventLoopGroup.singleton
         let threadPool = NIOThreadPool(numberOfThreads: 4)
-        try await threadPool.start()
+        threadPool.start()
         
         // Setup database
         let databases = Databases(threadPool: threadPool, on: eventLoopGroup)
@@ -229,11 +229,11 @@ struct Migrate: AsyncParsableCommand {
         
         if revert {
             logger.info("Reverting migrations...")
-            try await migrator.revertAllBatches()
+            _ = migrator.revertAllBatches()
         } else {
             logger.info("Applying migrations...")
-            try await migrator.setupIfNeeded()
-            try await migrator.prepareBatch()
+            _ = migrator.setupIfNeeded()
+            _ = migrator.prepareBatch()
         }
         
         logger.info("Migrations complete")
