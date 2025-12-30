@@ -1,4 +1,5 @@
 import Foundation
+import Hummingbird
 
 /// Request for POST /v1/swap (NUT-03)
 struct SwapRequest: Codable, Sendable {
@@ -10,7 +11,7 @@ struct SwapRequest: Codable, Sendable {
 }
 
 /// Response for POST /v1/swap (NUT-03)
-struct SwapResponse: Codable, Sendable {
+struct SwapResponse: ResponseCodable {
     /// Blind signatures for the outputs
     let signatures: [BlindSignatureData]
 }

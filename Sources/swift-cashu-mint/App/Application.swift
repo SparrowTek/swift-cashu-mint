@@ -1,25 +1,57 @@
 import Hummingbird
 import Logging
+import Fluent
+import FluentPostgresDriver
 import Foundation
 
 /// Build the Hummingbird application with all routes and middleware
+/// This is the main entry point that wires together all services and routes
 func buildApplication(
     config: MintConfiguration,
-    host: String,
-    port: Int,
+    database: Database,
+    lightningBackend: any LightningBackend,
     logger: Logger
 ) async throws -> some ApplicationProtocol {
-    // Configure JSON encoder/decoder for snake_case (Cashu API uses snake_case)
-    let encoder = JSONEncoder()
-    encoder.keyEncodingStrategy = .convertToSnakeCase
     
-    let decoder = JSONDecoder()
-    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    // MARK: - Initialize Services
     
-    // Create router
+    let keysetManager = KeysetManager(database: database)
+    let signingService = SigningService(database: database, keysetManager: keysetManager)
+    let proofValidator = ProofValidator(database: database, keysetManager: keysetManager)
+    let spentProofStore = SpentProofStore(database: database)
+    let quoteManager = QuoteManager(database: database, config: config)
+    let feeCalculator = FeeCalculator()
+    
+    // Load all keysets from database into memory
+    try await keysetManager.loadAllKeysets()
+    
+    // Ensure we have at least one active keyset
+    do {
+        _ = try await keysetManager.getActiveKeyset(unit: config.unit)
+    } catch {
+        // No active keyset exists, create one
+        logger.info("Creating initial keyset for unit: \(config.unit)")
+        _ = try await keysetManager.generateKeyset(
+            unit: config.unit,
+            inputFeePpk: config.inputFeePPK,
+            maxOrder: config.maxOrder
+        )
+    }
+    
+    // Get the active keyset pubkey for /v1/info
+    let activeKeyset = try await keysetManager.getActiveKeyset(unit: config.unit)
+    let mintPubkey = activeKeyset.publicKeys[1]  // Use the 1 sat key as mint pubkey
+    
+    // MARK: - Create Router
+    
     let router = Router()
     
-    // Add routes
+    // Add error middleware
+    router.middlewares.add(CashuErrorMiddleware(logger: logger))
+    
+    // MARK: - Basic Routes
+    
+    // Root endpoint
     router.get("/") { _, _ in
         "Swift Cashu Mint v0.1.0"
     }
@@ -32,53 +64,103 @@ func buildApplication(
         )
     }
     
-    // NUT-06: Mint Information
-    router.get("/v1/info") { _, _ in
-        GetInfoResponse(
-            name: config.name,
-            pubkey: nil, // Will be populated once keysets are loaded
-            version: "SwiftMint/0.1.0",
-            description: config.description,
-            descriptionLong: config.descriptionLong,
-            contact: config.contact.isEmpty ? nil : config.contact,
-            motd: config.motd,
-            iconUrl: config.iconURL,
-            tosUrl: config.tosURL,
-            nuts: NutsInfo(
-                nut4: NUT4Info(
-                    methods: [
-                        PaymentMethodInfo(method: "bolt11", unit: config.unit, minAmount: config.mintMinAmount, maxAmount: config.mintMaxAmount)
-                    ],
-                    disabled: false
-                ),
-                nut5: NUT5Info(
-                    methods: [
-                        PaymentMethodInfo(method: "bolt11", unit: config.unit, minAmount: config.meltMinAmount, maxAmount: config.meltMaxAmount)
-                    ],
-                    disabled: false
-                ),
-                nut7: NUTSupportInfo(supported: true),
-                nut8: NUTSupportInfo(supported: true),
-                nut9: NUTSupportInfo(supported: true)
-            )
+    // MARK: - NUT-06: Mint Information
+    
+    let infoResponse = GetInfoResponse(
+        name: config.name,
+        pubkey: mintPubkey,
+        version: "SwiftMint/0.1.0",
+        description: config.description,
+        descriptionLong: config.descriptionLong,
+        contact: config.contact.isEmpty ? nil : config.contact,
+        motd: config.motd,
+        iconUrl: config.iconURL,
+        tosUrl: config.tosURL,
+        nuts: NutsInfo(
+            nut4: NUT4Info(
+                methods: [
+                    PaymentMethodInfo(method: "bolt11", unit: config.unit, minAmount: config.mintMinAmount, maxAmount: config.mintMaxAmount)
+                ],
+                disabled: false
+            ),
+            nut5: NUT5Info(
+                methods: [
+                    PaymentMethodInfo(method: "bolt11", unit: config.unit, minAmount: config.meltMinAmount, maxAmount: config.meltMaxAmount)
+                ],
+                disabled: false
+            ),
+            nut7: NUTSupportInfo(supported: true),
+            nut8: NUTSupportInfo(supported: true),
+            nut9: NUTSupportInfo(supported: true)
         )
+    )
+    
+    router.get("/v1/info") { _, _ in
+        infoResponse
     }
     
-    // NUT-01: Public Keys (placeholder)
-    router.get("/v1/keys") { _, _ in
-        GetKeysResponse(keysets: [])
-    }
+    // MARK: - Add Routes
     
-    // NUT-02: Keysets (placeholder)
-    router.get("/v1/keysets") { _, _ in
-        GetKeysetsResponse(keysets: [])
-    }
+    // NUT-01/NUT-02: Keys routes
+    addKeyRoutes(to: router, keysetManager: keysetManager, logger: logger)
     
-    // Configure application
+    // NUT-03: Swap route
+    addSwapRoutes(
+        to: router,
+        keysetManager: keysetManager,
+        signingService: signingService,
+        proofValidator: proofValidator,
+        spentProofStore: spentProofStore,
+        feeCalculator: feeCalculator,
+        logger: logger
+    )
+    
+    // NUT-04/NUT-23: Mint routes
+    addMintRoutes(
+        to: router,
+        keysetManager: keysetManager,
+        signingService: signingService,
+        quoteManager: quoteManager,
+        lightningBackend: lightningBackend,
+        config: config,
+        logger: logger
+    )
+    
+    // NUT-05/NUT-08/NUT-23: Melt routes
+    addMeltRoutes(
+        to: router,
+        keysetManager: keysetManager,
+        signingService: signingService,
+        proofValidator: proofValidator,
+        spentProofStore: spentProofStore,
+        quoteManager: quoteManager,
+        feeCalculator: feeCalculator,
+        lightningBackend: lightningBackend,
+        config: config,
+        logger: logger
+    )
+    
+    // NUT-07: Check state route
+    addCheckRoutes(
+        to: router,
+        proofValidator: proofValidator,
+        spentProofStore: spentProofStore,
+        logger: logger
+    )
+    
+    // NUT-09: Restore route
+    addRestoreRoutes(
+        to: router,
+        signingService: signingService,
+        logger: logger
+    )
+    
+    // MARK: - Configure Application
+    
     let app = Application(
         router: router,
         configuration: .init(
-            address: .hostname(host, port: port)
+            address: .hostname(config.host, port: config.port)
         ),
         logger: logger
     )
