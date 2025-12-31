@@ -33,15 +33,13 @@ struct Serve: AsyncParsableCommand {
     @Flag(name: .long, help: "Enable verbose logging")
     var verbose = false
     
+    @Flag(name: .long, help: "Output logs in JSON format")
+    var jsonLogs = false
+
     func run() async throws {
-        // Setup logging
-        let logLevel: Logger.Level = verbose ? .debug : .info
-        LoggingSystem.bootstrap { label in
-            var handler = StreamLogHandler.standardOutput(label: label)
-            handler.logLevel = logLevel
-            return handler
-        }
-        
+        // Setup logging with optional JSON format
+        configureLogging(verbose: verbose, jsonFormat: jsonLogs)
+
         let logger = Logger(label: "swift-cashu-mint")
         
         logger.info("Starting Swift Cashu Mint...")
@@ -68,38 +66,38 @@ struct Serve: AsyncParsableCommand {
         let eventLoopGroup = MultiThreadedEventLoopGroup.singleton
         let threadPool = NIOThreadPool(numberOfThreads: 4)
         threadPool.start()
-        
-        // Setup database
-        let databases = Databases(threadPool: threadPool, on: eventLoopGroup)
-        
-        // Parse DATABASE_URL and configure PostgreSQL
-        let databaseURL = config.databaseURL
-        guard let url = URL(string: databaseURL) else {
-            logger.error("Invalid DATABASE_URL")
-            throw ConfigurationError.invalidValue("DATABASE_URL", "Invalid URL format")
-        }
-        
-        var tlsConfig: PostgresConnection.Configuration.TLS = .disable
-        if url.scheme == "postgresql" && url.host?.contains("localhost") != true {
-            tlsConfig = .prefer(try .init(configuration: .clientDefault))
-        }
-        
-        let postgresConfig = PostgresConnection.Configuration(
-            host: url.host ?? "localhost",
-            port: url.port ?? 5432,
-            username: url.user ?? "postgres",
-            password: url.password,
-            database: url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")),
-            tls: tlsConfig
+
+        // Setup database with connection pooling
+        let dbFactory = DatabaseFactory(
+            logger: logger,
+            poolConfig: .fromEnvironment()
         )
-        
-        let sqlConfig = SQLPostgresConfiguration(coreConfiguration: postgresConfig)
-        databases.use(DatabaseConfigurationFactory.postgres(configuration: sqlConfig), as: .psql)
-        
+
+        let databases: Databases
+        let database: any Database
+        do {
+            (databases, database) = try dbFactory.createDatabase(
+                url: config.databaseURL,
+                threadPool: threadPool,
+                eventLoopGroup: eventLoopGroup
+            )
+        } catch let error as DatabaseConfigurationError {
+            logger.error("Database configuration failed: \(error.description)")
+            throw error
+        }
+
+        // Test database connection with retry logic
+        do {
+            try await dbFactory.testConnection(database: database)
+        } catch {
+            logger.error("Database connection test failed: \(error)")
+            throw error
+        }
+
         // Add migrations
         let migrations = Migrations()
         migrations.add(CreateMintTables())
-        
+
         // Run migrations
         logger.info("Running database migrations...")
         let migrator = Migrator(
@@ -111,9 +109,6 @@ struct Serve: AsyncParsableCommand {
         _ = migrator.setupIfNeeded()
         _ = migrator.prepareBatch()
         logger.info("Database migrations complete")
-        
-        // Get the database connection
-        let database = databases.database(.psql, logger: logger, on: eventLoopGroup.next())!
         
         // Create Lightning backend
         let lightningBackend = try LightningBackendFactory.create(from: config)

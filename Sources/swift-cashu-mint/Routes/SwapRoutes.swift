@@ -50,9 +50,17 @@ private func processSwap(
     guard !inputs.isEmpty else {
         throw CashuMintError.transactionNotBalanced(0, outputs.reduce(0) { $0 + $1.amount })
     }
-    
+
     guard !outputs.isEmpty else {
         throw CashuMintError.transactionNotBalanced(inputs.reduce(0) { $0 + $1.amount }, 0)
+    }
+
+    // 1.5. Input format validation (hex, public keys, amounts)
+    do {
+        try InputValidator.validateProofsFormat(inputs)
+        try InputValidator.validateBlindedMessagesFormat(outputs)
+    } catch let error as ValidationError {
+        throw CashuMintError.from(error)
     }
     
     // 2. Check for duplicate inputs

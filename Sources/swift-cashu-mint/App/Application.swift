@@ -43,11 +43,25 @@ func buildApplication(
     let mintPubkey = activeKeyset.publicKeys[1]  // Use the 1 sat key as mint pubkey
     
     // MARK: - Create Router
-    
+
     let router = Router()
-    
-    // Add error middleware
+
+    // Add error middleware (first, to catch all errors including rate limit)
     router.middlewares.add(CashuErrorMiddleware(logger: logger))
+
+    // Add rate limiting middleware
+    let rateLimitStore = RateLimitStore()
+    router.middlewares.add(RateLimitMiddleware(
+        store: rateLimitStore,
+        config: config.rateLimitConfig,
+        logger: logger
+    ))
+
+    // Add request size limit middleware
+    router.middlewares.add(RequestSizeLimitMiddleware())
+
+    // Add request logging middleware for structured logs
+    router.middlewares.add(RequestLoggingMiddleware(logger: logger))
     
     // MARK: - Basic Routes
     

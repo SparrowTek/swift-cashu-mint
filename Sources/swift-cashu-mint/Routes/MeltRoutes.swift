@@ -37,10 +37,14 @@ func addMeltRoutes<Context: RequestContext>(
     // GET /v1/melt/quote/bolt11/{quote_id} - Check melt quote status (NUT-05)
     router.get("/v1/melt/quote/bolt11/{quote_id}") { request, context in
         let quoteId = context.parameters.get("quote_id") ?? ""
-        guard !quoteId.isEmpty else {
-            throw CashuMintError.quoteNotFound("")
+
+        // Validate quote ID format
+        do {
+            try InputValidator.validateQuoteId(quoteId)
+        } catch {
+            throw CashuMintError.quoteNotFound(quoteId)
         }
-        
+
         return try await checkMeltQuote(
             quoteId: quoteId,
             quoteManager: quoteManager,
@@ -190,7 +194,17 @@ private func meltTokens(
     guard !inputs.isEmpty else {
         throw CashuMintError.transactionNotBalanced(0, quote.amount + quote.feeReserve)
     }
-    
+
+    // 2.5. Validate input formats
+    do {
+        try InputValidator.validateProofsFormat(inputs)
+        if !blankOutputs.isEmpty {
+            try InputValidator.validateBlindedMessagesFormat(blankOutputs)
+        }
+    } catch let error as ValidationError {
+        throw CashuMintError.from(error)
+    }
+
     // 3. Check for duplicate inputs
     let inputSecrets = Set(inputs.map { $0.secret })
     if inputSecrets.count != inputs.count {

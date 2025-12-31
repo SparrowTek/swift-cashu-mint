@@ -33,8 +33,12 @@ func addMintRoutes<Context: RequestContext>(
     // GET /v1/mint/quote/bolt11/{quote_id} - Check mint quote status (NUT-04)
     router.get("/v1/mint/quote/bolt11/{quote_id}") { request, context in
         let quoteId = context.parameters.get("quote_id") ?? ""
-        guard !quoteId.isEmpty else {
-            throw CashuMintError.quoteNotFound("")
+
+        // Validate quote ID format
+        do {
+            try InputValidator.validateQuoteId(quoteId)
+        } catch {
+            throw CashuMintError.quoteNotFound(quoteId)
         }
         
         return try await checkMintQuote(
@@ -200,7 +204,14 @@ private func mintTokens(
     guard !outputs.isEmpty else {
         throw CashuMintError.transactionNotBalanced(quote.amount, 0)
     }
-    
+
+    // 2.5. Validate output formats
+    do {
+        try InputValidator.validateBlindedMessagesFormat(outputs)
+    } catch let error as ValidationError {
+        throw CashuMintError.from(error)
+    }
+
     // 3. Check for duplicate outputs
     let outputBlinds = Set(outputs.map { $0.B_ })
     if outputBlinds.count != outputs.count {
