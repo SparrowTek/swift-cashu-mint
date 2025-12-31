@@ -16,6 +16,7 @@ func addMeltRoutes<Context: RequestContext>(
     spentProofStore: SpentProofStore,
     quoteManager: QuoteManager,
     feeCalculator: FeeCalculator,
+    spendingConditionValidator: SpendingConditionValidator,
     lightningBackend: any LightningBackend,
     config: MintConfiguration,
     logger: Logger
@@ -55,7 +56,7 @@ func addMeltRoutes<Context: RequestContext>(
     // POST /v1/melt/bolt11 - Melt tokens (NUT-05, NUT-08, NUT-23)
     router.post("/v1/melt/bolt11") { request, context in
         let meltRequest = try await request.decode(as: MeltRequest.self, context: context)
-        
+
         return try await meltTokens(
             request: meltRequest,
             keysetManager: keysetManager,
@@ -64,6 +65,7 @@ func addMeltRoutes<Context: RequestContext>(
             spentProofStore: spentProofStore,
             quoteManager: quoteManager,
             feeCalculator: feeCalculator,
+            spendingConditionValidator: spendingConditionValidator,
             lightningBackend: lightningBackend,
             config: config,
             logger: logger
@@ -74,6 +76,7 @@ func addMeltRoutes<Context: RequestContext>(
 // MARK: - POST /v1/melt/quote/bolt11 (NUT-05, NUT-23)
 
 /// Create a melt quote by decoding the Lightning invoice
+/// Supports NUT-15 MPP (multi-path payments) via the options parameter
 private func createMeltQuote(
     request: MeltQuoteRequest,
     quoteManager: QuoteManager,
@@ -86,7 +89,7 @@ private func createMeltQuote(
     if request.unit != config.unit {
         throw CashuMintError.unitNotSupported(request.unit)
     }
-    
+
     // 2. Decode the Lightning invoice
     let decodedInvoice: DecodedInvoice
     do {
@@ -94,38 +97,67 @@ private func createMeltQuote(
     } catch {
         throw CashuMintError.internalError("Failed to decode invoice: \(error)")
     }
-    
+
     // 3. Get the invoice amount
-    guard let amountSat = decodedInvoice.amountSat else {
+    guard let invoiceAmountSat = decodedInvoice.amountSat else {
         // Amountless invoices not supported in V1
         throw CashuMintError.amountlessNotSupported
     }
-    
-    // 4. Validate amount within limits
+
+    // 4. Handle MPP (NUT-15) - use partial amount if specified
+    let mppAmountMsat = request.options?.mpp?.amount
+    let amountSat: Int
+
+    if let mppMsat = mppAmountMsat {
+        // MPP: use the specified partial amount (convert from msat to sat)
+        amountSat = mppMsat / 1000
+
+        // Validate MPP amount doesn't exceed invoice amount
+        if amountSat > invoiceAmountSat {
+            throw CashuMintError.amountOutsideLimit(amountSat, 1, invoiceAmountSat)
+        }
+
+        // Validate MPP amount is positive
+        if amountSat <= 0 {
+            throw CashuMintError.amountOutsideLimit(amountSat, 1, invoiceAmountSat)
+        }
+
+        logger.info("MPP melt quote", metadata: [
+            "partial_amount_sat": .string(String(amountSat)),
+            "invoice_amount_sat": .string(String(invoiceAmountSat))
+        ])
+    } else {
+        // Standard: use full invoice amount
+        amountSat = invoiceAmountSat
+    }
+
+    // 5. Validate amount within limits
     if amountSat < config.meltMinAmount || amountSat > config.meltMaxAmount {
         throw CashuMintError.amountOutsideLimit(amountSat, config.meltMinAmount, config.meltMaxAmount)
     }
-    
-    // 5. Estimate fee reserve
+
+    // 6. Estimate fee reserve
     // Simple estimation: 1% of amount + 1 sat base fee, minimum 1 sat
     let feeReserve = feeCalculator.estimateFeeReserve(amount: amountSat, baseFee: 1, feeRate: 0.01)
-    
-    // 6. Create quote in database
+
+    // 7. Create quote in database
     let quote = try await quoteManager.createMeltQuote(
         request: request.request,
         unit: request.unit,
         amount: amountSat,
         feeReserve: feeReserve,
-        expiry: decodedInvoice.expiry
+        expiry: decodedInvoice.expiry,
+        mppAmount: mppAmountMsat
     )
-    
+
     logger.info("Melt quote created", metadata: [
         "quote_id": .string(quote.quoteId),
-        "amount": .stringConvertible(amountSat),
-        "fee_reserve": .stringConvertible(feeReserve),
-        "unit": .string(request.unit)
+        "amount": .string(String(amountSat)),
+        "fee_reserve": .string(String(feeReserve)),
+        "unit": .string(request.unit),
+        "is_mpp": .string(String(mppAmountMsat != nil))
     ])
-    
+
     return MeltQuoteResponse(from: quote)
 }
 
@@ -163,6 +195,7 @@ private func meltTokens(
     spentProofStore: SpentProofStore,
     quoteManager: QuoteManager,
     feeCalculator: FeeCalculator,
+    spendingConditionValidator: SpendingConditionValidator,
     lightningBackend: any LightningBackend,
     config: MintConfiguration,
     logger: Logger
@@ -203,6 +236,16 @@ private func meltTokens(
         }
     } catch let error as ValidationError {
         throw CashuMintError.from(error)
+    }
+
+    // 2.6. Validate spending conditions (NUT-10, NUT-11, NUT-14)
+    // For melt with SIG_ALL, we include the quote_id in the message
+    let spendingConditionFailures = try await spendingConditionValidator.validateSpendingConditions(
+        proofs: inputs,
+        outputs: blankOutputs
+    )
+    if let (_, error) = spendingConditionFailures.first {
+        throw CashuMintError.tokenCouldNotBeVerified(error.description)
     }
 
     // 3. Check for duplicate inputs

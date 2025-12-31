@@ -21,6 +21,7 @@ func buildApplication(
     let spentProofStore = SpentProofStore(database: database)
     let quoteManager = QuoteManager(database: database, config: config)
     let feeCalculator = FeeCalculator()
+    let spendingConditionValidator = SpendingConditionValidator(logger: logger)
     
     // Load all keysets from database into memory
     try await keysetManager.loadAllKeysets()
@@ -105,7 +106,17 @@ func buildApplication(
             ),
             nut7: NUTSupportInfo(supported: true),
             nut8: NUTSupportInfo(supported: true),
-            nut9: NUTSupportInfo(supported: true)
+            nut9: NUTSupportInfo(supported: true),
+            nut10: NUTSupportInfo(supported: true),
+            nut11: NUTSupportInfo(supported: true),
+            nut12: NUTSupportInfo(supported: true),
+            nut14: NUTSupportInfo(supported: true),
+            nut15: NUT15Info(
+                methods: [
+                    NUT15MethodInfo(method: "bolt11", unit: config.unit, mpp: true)
+                ],
+                disabled: false
+            )
         )
     )
     
@@ -126,6 +137,7 @@ func buildApplication(
         proofValidator: proofValidator,
         spentProofStore: spentProofStore,
         feeCalculator: feeCalculator,
+        spendingConditionValidator: spendingConditionValidator,
         logger: logger
     )
     
@@ -149,6 +161,7 @@ func buildApplication(
         spentProofStore: spentProofStore,
         quoteManager: quoteManager,
         feeCalculator: feeCalculator,
+        spendingConditionValidator: spendingConditionValidator,
         lightningBackend: lightningBackend,
         config: config,
         logger: logger
@@ -219,14 +232,36 @@ struct NutsInfo: Codable, Sendable {
     let nut7: NUTSupportInfo
     let nut8: NUTSupportInfo
     let nut9: NUTSupportInfo
-    
+    let nut10: NUTSupportInfo
+    let nut11: NUTSupportInfo
+    let nut12: NUTSupportInfo
+    let nut14: NUTSupportInfo
+    let nut15: NUT15Info
+
     enum CodingKeys: String, CodingKey {
         case nut4 = "4"
         case nut5 = "5"
         case nut7 = "7"
         case nut8 = "8"
         case nut9 = "9"
+        case nut10 = "10"
+        case nut11 = "11"
+        case nut12 = "12"
+        case nut14 = "14"
+        case nut15 = "15"
     }
+}
+
+/// NUT-15 Multi-path Payments info
+struct NUT15Info: Codable, Sendable {
+    let methods: [NUT15MethodInfo]
+    let disabled: Bool
+}
+
+struct NUT15MethodInfo: Codable, Sendable {
+    let method: String
+    let unit: String
+    let mpp: Bool
 }
 
 struct NUT4Info: Codable, Sendable {

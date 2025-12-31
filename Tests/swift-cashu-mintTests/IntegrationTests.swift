@@ -51,30 +51,46 @@ struct IntegrationTests {
                 ),
                 nut7: NUTSupportInfo(supported: true),
                 nut8: NUTSupportInfo(supported: true),
-                nut9: NUTSupportInfo(supported: true)
+                nut9: NUTSupportInfo(supported: true),
+                nut10: NUTSupportInfo(supported: true),
+                nut11: NUTSupportInfo(supported: true),
+                nut12: NUTSupportInfo(supported: true),
+                nut14: NUTSupportInfo(supported: true),
+                nut15: NUT15Info(
+                    methods: [NUT15MethodInfo(method: "bolt11", unit: "sat", mpp: true)],
+                    disabled: false
+                )
             )
         )
-        
+
         let encoder = JSONEncoder()
         let data = try encoder.encode(response)
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        
-        #expect(json?["name"] as? String == "Test Mint")
-        #expect(json?["pubkey"] as? String == "02abc123")
-        #expect(json?["version"] as? String == "SwiftMint/0.1.0")
-        #expect(json?["description"] as? String == "A test mint")
-        #expect(json?["description_long"] as? String == "A longer description")
-        #expect(json?["motd"] as? String == "Welcome!")
-        #expect(json?["icon_url"] as? String == "https://example.com/icon.png")
-        #expect(json?["tos_url"] as? String == "https://example.com/tos")
-        
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            Issue.record("Failed to parse JSON")
+            return
+        }
+
+        #expect(json["name"] as? String == "Test Mint")
+        #expect(json["pubkey"] as? String == "02abc123")
+        #expect(json["version"] as? String == "SwiftMint/0.1.0")
+        #expect(json["description"] as? String == "A test mint")
+        #expect(json["description_long"] as? String == "A longer description")
+        #expect(json["motd"] as? String == "Welcome!")
+        #expect(json["icon_url"] as? String == "https://example.com/icon.png")
+        #expect(json["tos_url"] as? String == "https://example.com/tos")
+
         // Check nuts are nested with numeric keys
-        let nuts = json?["nuts"] as? [String: Any]
+        let nuts = json["nuts"] as? [String: Any]
         #expect(nuts?["4"] != nil)
         #expect(nuts?["5"] != nil)
         #expect(nuts?["7"] != nil)
         #expect(nuts?["8"] != nil)
         #expect(nuts?["9"] != nil)
+        #expect(nuts?["10"] != nil)
+        #expect(nuts?["11"] != nil)
+        #expect(nuts?["12"] != nil)
+        #expect(nuts?["14"] != nil)
+        #expect(nuts?["15"] != nil)
     }
     
     @Test("GetInfoResponse with minimal fields")
@@ -94,15 +110,23 @@ struct IntegrationTests {
                 nut5: NUT5Info(methods: [], disabled: true),
                 nut7: NUTSupportInfo(supported: false),
                 nut8: NUTSupportInfo(supported: false),
-                nut9: NUTSupportInfo(supported: false)
+                nut9: NUTSupportInfo(supported: false),
+                nut10: NUTSupportInfo(supported: false),
+                nut11: NUTSupportInfo(supported: false),
+                nut12: NUTSupportInfo(supported: false),
+                nut14: NUTSupportInfo(supported: false),
+                nut15: NUT15Info(methods: [], disabled: true)
             )
         )
-        
+
         let encoder = JSONEncoder()
         let data = try encoder.encode(response)
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        
-        #expect(json?["name"] as? String == "Minimal Mint")
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            Issue.record("Failed to parse JSON")
+            return
+        }
+
+        #expect(json["name"] as? String == "Minimal Mint")
         // Optional fields should be null or missing
     }
     

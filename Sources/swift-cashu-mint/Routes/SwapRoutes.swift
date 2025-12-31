@@ -13,12 +13,13 @@ func addSwapRoutes<Context: RequestContext>(
     proofValidator: ProofValidator,
     spentProofStore: SpentProofStore,
     feeCalculator: FeeCalculator,
+    spendingConditionValidator: SpendingConditionValidator,
     logger: Logger
 ) {
     router.post("/v1/swap") { request, context in
         // Decode request
         let swapRequest = try await request.decode(as: SwapRequest.self, context: context)
-        
+
         return try await processSwap(
             request: swapRequest,
             keysetManager: keysetManager,
@@ -26,6 +27,7 @@ func addSwapRoutes<Context: RequestContext>(
             proofValidator: proofValidator,
             spentProofStore: spentProofStore,
             feeCalculator: feeCalculator,
+            spendingConditionValidator: spendingConditionValidator,
             logger: logger
         )
     }
@@ -41,6 +43,7 @@ private func processSwap(
     proofValidator: ProofValidator,
     spentProofStore: SpentProofStore,
     feeCalculator: FeeCalculator,
+    spendingConditionValidator: SpendingConditionValidator,
     logger: Logger
 ) async throws -> SwapResponse {
     let inputs = request.inputs
@@ -62,7 +65,16 @@ private func processSwap(
     } catch let error as ValidationError {
         throw CashuMintError.from(error)
     }
-    
+
+    // 1.6. Validate spending conditions (NUT-10, NUT-11, NUT-14)
+    let spendingConditionFailures = try await spendingConditionValidator.validateSpendingConditions(
+        proofs: inputs,
+        outputs: outputs
+    )
+    if let (_, error) = spendingConditionFailures.first {
+        throw CashuMintError.tokenCouldNotBeVerified(error.description)
+    }
+
     // 2. Check for duplicate inputs
     let inputSecrets = Set(inputs.map { $0.secret })
     if inputSecrets.count != inputs.count {

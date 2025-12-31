@@ -100,6 +100,23 @@ struct CreateMintTables: AsyncMigration {
     }
 }
 
+/// Migration to add NUT-15 MPP support to melt_quotes
+struct AddMPPSupport: AsyncMigration {
+
+    func prepare(on database: Database) async throws {
+        // Add mpp_amount column to melt_quotes table
+        try await database.schema(MeltQuote.schema)
+            .field("mpp_amount", .int)
+            .update()
+    }
+
+    func revert(on database: Database) async throws {
+        try await database.schema(MeltQuote.schema)
+            .deleteField("mpp_amount")
+            .update()
+    }
+}
+
 /// Migration to create indexes for performance
 /// Separated from table creation for clarity
 struct CreateIndexes: AsyncMigration {
@@ -125,6 +142,7 @@ struct CreateIndexes: AsyncMigration {
 var allMigrations: [any AsyncMigration] {
     [
         CreateMintTables(),
+        AddMPPSupport(),
         CreateIndexes()
     ]
 }

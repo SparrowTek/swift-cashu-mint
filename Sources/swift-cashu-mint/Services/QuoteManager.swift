@@ -186,12 +186,20 @@ actor QuoteManager {
     // MARK: - Melt Quotes (NUT-05)
     
     /// Create a new melt quote
+    /// - Parameters:
+    ///   - request: The Lightning invoice to pay
+    ///   - unit: The unit of the tokens being melted
+    ///   - amount: The amount to pay (in sats)
+    ///   - feeReserve: The maximum fee the mint will charge for routing
+    ///   - expiry: When the quote expires
+    ///   - mppAmount: Optional MPP partial amount in millisats (NUT-15)
     func createMeltQuote(
         request: String,
         unit: String,
         amount: Int,
         feeReserve: Int,
-        expiry: Date
+        expiry: Date,
+        mppAmount: Int? = nil
     ) async throws -> MeltQuote {
         // Validate amount within limits
         guard amount >= config.meltMinAmount else {
@@ -200,10 +208,10 @@ actor QuoteManager {
         guard amount <= config.meltMaxAmount else {
             throw QuoteError.invalidAmount("Amount \(amount) is above maximum \(config.meltMaxAmount)")
         }
-        
+
         // Generate unique quote ID
         let quoteId = generateQuoteId()
-        
+
         let quote = MeltQuote(
             quoteId: quoteId,
             method: "bolt11",
@@ -212,11 +220,12 @@ actor QuoteManager {
             amount: amount,
             feeReserve: feeReserve,
             state: .unpaid,
-            expiry: expiry
+            expiry: expiry,
+            mppAmount: mppAmount
         )
-        
+
         try await quote.save(on: database)
-        
+
         return quote
     }
     

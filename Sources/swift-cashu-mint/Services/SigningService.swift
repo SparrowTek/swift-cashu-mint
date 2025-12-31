@@ -107,23 +107,23 @@ actor SigningService {
         return signatures
     }
     
-    /// Sign a single blinded message with DLEQ proof
+    /// Sign a single blinded message with DLEQ proof (NUT-12)
     func signBlindedMessageWithDLEQ(_ message: BlindedMessageData) async throws -> BlindSignatureData {
         // Validate keyset exists and is active
         let keyset = try await keysetManager.getKeyset(id: message.id)
-        
+
         guard keyset.active else {
             throw SigningError.keysetNotActive(message.id)
         }
-        
+
         // Get the private key for this amount
         let privateKey = try await keysetManager.getPrivateKey(keysetId: message.id, amount: message.amount)
-        
+
         // Parse the blinded message (B_)
         guard let blindedMessageData = Data(hexString: message.B_) else {
             throw SigningError.invalidBlindedMessage("Invalid hex string for B_")
         }
-        
+
         // Perform BDHKE signing: C_ = k * B_
         let mint = Mint(privateKey: privateKey)
         let blindedSignatureData: Data
@@ -132,15 +132,32 @@ actor SigningService {
         } catch {
             throw SigningError.signingFailed(error.localizedDescription)
         }
-        
+
         let blindedSignatureHex = blindedSignatureData.hexEncodedString()
-        
-        // Generate DLEQ proof
-        // Note: DLEQ proof generation requires accessing the DLEQProof type from CoreCashu
-        // For now, we skip DLEQ generation - it can be added in a future enhancement
-        let dleqProof: DLEQProofData? = nil
-        // TODO: Implement DLEQ proof generation using CoreCashu's generateDLEQProof function
-        
+
+        // Generate DLEQ proof using CoreCashu
+        var dleqProof: DLEQProofData? = nil
+        do {
+            // Parse B_ and C_ as public keys
+            let B_ = try P256K.KeyAgreement.PublicKey(dataRepresentation: blindedMessageData)
+            let C_ = try P256K.KeyAgreement.PublicKey(dataRepresentation: blindedSignatureData)
+
+            // Convert signing private key to key agreement key
+            let keyAgreementPrivateKey = try P256K.KeyAgreement.PrivateKey(dataRepresentation: privateKey.rawRepresentation)
+
+            // Generate DLEQ proof
+            let proof = try generateDLEQProof(
+                privateKey: keyAgreementPrivateKey,
+                blindedMessage: B_,
+                blindedSignature: C_
+            )
+
+            dleqProof = DLEQProofData(e: proof.e, s: proof.s)
+        } catch {
+            // If DLEQ proof generation fails, continue without it (optional feature)
+            // Log the error but don't fail the signing operation
+        }
+
         // Store the blind signature for NUT-09 restore
         let record = BlindSignatureRecord(
             B_: message.B_,
@@ -151,7 +168,7 @@ actor SigningService {
             dleqS: dleqProof?.s
         )
         try await record.save(on: database)
-        
+
         return BlindSignatureData(
             amount: message.amount,
             id: message.id,

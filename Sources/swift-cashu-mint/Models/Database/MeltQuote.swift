@@ -71,7 +71,12 @@ final class MeltQuote: Model, @unchecked Sendable {
     /// When the payment completed (if state == PAID)
     @OptionalField(key: "paid_at")
     var paidAt: Date?
-    
+
+    /// MPP partial amount in millisats (NUT-15)
+    /// If set, this quote is for a partial payment of the invoice
+    @OptionalField(key: "mpp_amount")
+    var mppAmount: Int?
+
     /// Empty initializer required by Fluent
     init() {}
     
@@ -85,7 +90,8 @@ final class MeltQuote: Model, @unchecked Sendable {
         amount: Int,
         feeReserve: Int,
         state: MeltQuoteState = .unpaid,
-        expiry: Date
+        expiry: Date,
+        mppAmount: Int? = nil
     ) {
         self.id = id
         self.quoteId = quoteId
@@ -96,6 +102,12 @@ final class MeltQuote: Model, @unchecked Sendable {
         self.feeReserve = feeReserve
         self.state = state
         self.expiry = expiry
+        self.mppAmount = mppAmount
+    }
+
+    /// Check if this is a multi-path payment quote
+    var isMPP: Bool {
+        mppAmount != nil
     }
 }
 
@@ -147,13 +159,29 @@ struct MeltQuoteResponse: Codable, Sendable {
     }
 }
 
-/// Request for POST /v1/melt/quote/bolt11 (NUT-05)
+/// Request for POST /v1/melt/quote/bolt11 (NUT-05, NUT-15)
 struct MeltQuoteRequest: Codable, Sendable {
     /// Lightning invoice to pay
     let request: String
-    
+
     /// Unit of the tokens to melt
     let unit: String
+
+    /// Optional payment options (NUT-15 MPP)
+    let options: MeltQuoteOptions?
+}
+
+/// Payment options for melt quotes (NUT-15)
+struct MeltQuoteOptions: Codable, Sendable {
+    /// Multi-path payment options
+    let mpp: MPPOptions?
+}
+
+/// Multi-path payment options (NUT-15)
+struct MPPOptions: Codable, Sendable {
+    /// Partial amount to pay in millisats
+    /// If specified, this mint will only pay this partial amount of the invoice
+    let amount: Int
 }
 
 /// Request for POST /v1/melt/bolt11 (NUT-05)
